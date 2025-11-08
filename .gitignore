@@ -1,2 +1,5 @@
 # npm module
 /node_modules
+
+# development environment variables file
+.env
