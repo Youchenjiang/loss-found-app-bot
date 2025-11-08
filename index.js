@@ -2,6 +2,9 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 const { CLIENT_ID, GUILD_ID, TOKEN } = process.env;
 
+const keyword = 'lfa';
+const responseMessage = '你好啊！';
+
 const client = new Client({
 	intents: [
 		// 基本事件
@@ -19,17 +22,11 @@ const client = new Client({
 		// 接收到反應的事件
 		GatewayIntentBits.GuildMessageReactions 
 	],
-	presence: {
-		activities: [{
-			name: "線上狀態",
-			type: ActivityType.Playing,
-		}],
-		status: 'online',
-	},
 });
 
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
+  client.user.setPresence({ activities: [{ name: '被編程中', type: ActivityType.Playing }] , status: 'online' });
 });
 
 client.on('interactionCreate', async interaction => {
@@ -39,5 +36,12 @@ client.on('interactionCreate', async interaction => {
     await interaction.reply('Pong!');
   }
 });
+
+client.on('messageCreate', async message => {
+	if (message.author.bot) return;
+	if(message.content.includes(keyword)){
+		message.reply(responseMessage)
+	}
+})
 
 client.login(TOKEN);
