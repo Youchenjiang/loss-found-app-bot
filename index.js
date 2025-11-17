@@ -17,6 +17,30 @@ const reactionEmoji = REACTION_EMOJI || '👍';
 const decisionModel = OPENAI_MODEL || 'gpt-4o-mini';
 const lowEmotionCuePattern = /(崩潰|崩溃|難過|难过|傷心|伤心|痛苦|絕望|绝望|我不行|不想活|好累|沮喪|沮丧|憂鬱|忧郁|焦慮|焦虑|壓力|压力|help|救命|救救我|拜託|拜托|QQ|T_T|:'\(|:’\(|哭|哭哭|sob|depress|anxious|無助|无助|恐慌|失眠|自責|自责|痛心|遺憾|遗憾|煎熬)/i;
 const emotionalCuePattern = /[!?！？…~⋯]|(XD|QQ|囧|怒|氣|气|哭|笑|爽|悲|累|崩潰|崩溃|開心|开心|難過|难过|興奮|兴奋|緊張|紧张|害怕|期待|激動|激动|生氣|生气|煩|烦|糟糕|無語|无语|靠北|傻眼|:D|:\)|:\(|:o|>_<|orz|哈哈|哭哭|爽啦|angry|sad|happy|mad|tired|yay|lol|haha|lmao|omg|wow)/i;
+const commandSplitRegex = /[,，\n]+/;
+const emojiKeywordMap = {
+	good: '👍',
+	ok: '👍',
+	positive: '👍',
+	great: '👍',
+	happy: '😊',
+	excited: '🤩',
+	love: '❤️',
+	heart: '❤️',
+	proud: '🤗',
+	bad: '😢',
+	sad: '😢',
+	down: '😢',
+	upset: '😢',
+	cry: '😭',
+	negative: '😢',
+	angry: '😠',
+	mad: '😡',
+	shock: '😮',
+	wow: '😮',
+	fear: '😨',
+	anxious: '😰'
+};
 
 const openai = OPENAI_API_KEY
 	? new OpenAI({
@@ -26,15 +50,13 @@ const openai = OPENAI_API_KEY
 	: null;
 
 const decisionSystemPrompt = `
-你是一個專門評估訊息情緒的 Discord Bot 決策助理。請依照輸入的訊息內容，輸出唯一一個 JSON 結果，用於決定是否互動。
-- 先判斷情緒強度：neutral（無情緒）、emotional（有起伏但未到極低）、extremely_low（極度低落或求助）。
-- action 只能是 "reply_and_reaction"、"reaction" 或 "ignore"。
-- 僅在句子出現悲傷/求助詞、情緒化語彙、強烈標點、表情符號時才視為 emotional；像「在嗎」「OK」等平鋪直敘訊息必須判為 neutral。
-- 只有 extremely_low 才能輸出 "reply_and_reaction"，此時必須提供繁體中文、充滿鼓勵與陪伴語氣的 replyText。內容應著重溫暖、肯定、提醒對方休息或深呼吸，避免承諾「我能幫忙」或詢問「需要我幫什麼」。
-- 若是 emotional（但未到極低），action 必須為 "reaction"，可提供 reaction 表情但禁止輸出文字回覆。
-- 若為 neutral，action 為 "ignore"，不做任何事。
-- 請格外注意求救語氣、悲傷詞彙、直接點名 "lfa" 並表達痛苦的訊息，這些通常屬於 extremely_low。
-- 嚴格回傳單一 JSON，不得輸出額外文字。
+你是一個專門為 Discord Bot 做互動判斷的助理。請依照輸入的訊息內容，只輸出幾個以逗號分隔的指令，每個指令都必須採用 "KEY|VALUE" 格式（例如：react|👍, reply|嗨，很高興見到你）。
+- 支援的 KEY：react / reaction / emoji（代表只需要按表情）、reply / say / message / text（代表要發訊息）、action / mode（明確指定 ignore、reaction、reply、reply_and_reaction 等）。
+- 若需要同時回覆和表情，可以輸出兩組指令，例如：reply|感謝你的分享, react|😊。
+- 若只需要按表情，可輸出 react|😂 或 emoji|sad（sad 會被系統轉換成對應表情）。
+- 若應該完全忽略，請輸出 action|ignore。
+- 所有回覆文字請使用繁體中文，且不要承諾「我能幫忙」這類內容，鼓勵即可。
+- 嚴格遵守上述格式，勿輸出 JSON 或多餘敘述。
 `;
 
 function deriveFallbackDecision(content = '') {
@@ -67,47 +89,147 @@ async function reactToMessage(message, emojiCandidate) {
 	}
 }
 
-function enforceEmotionPolicy(decision, content = '') {
-	const normalized = content || '';
-	const lowered = normalized.toLowerCase();
-	const hasExtremeEmotion = lowered.includes(keyword) || lowEmotionCuePattern.test(normalized);
-	const hasEmotion = hasExtremeEmotion || emotionalCuePattern.test(normalized);
+function looksLikeEmoji(value = '') {
+	return /\p{Extended_Pictographic}/u.test(value);
+}
 
-	if (hasExtremeEmotion && decision.action !== 'reply_and_reaction') {
-		return {
-			action: 'reply_and_reaction',
-			replyText: decision.replyText || supportiveReply,
-			reaction: decision.reaction || reactionEmoji,
-		};
+function normalizeEmojiValue(value = '') {
+	const trimmed = value.trim();
+	if (!trimmed) return '';
+	if (looksLikeEmoji(trimmed)) return trimmed;
+
+	const key = trimmed.replace(/\s+/g, '').toLowerCase();
+	if (emojiKeywordMap[key]) return emojiKeywordMap[key];
+	return trimmed;
+}
+
+function coerceActionKeyword(raw = '') {
+	const value = raw.trim().toLowerCase();
+	if (!value) return undefined;
+
+	if (['ignore', 'skip', 'none'].includes(value)) return 'ignore';
+	if (['reaction', 'react', 'emoji'].includes(value)) return 'reaction';
+	if (['reply', 'say', 'message', 'text', 'talk'].includes(value)) return 'reply';
+	if (['reply_and_reaction', 'both', 'all', 'reply+reaction', 'combo'].includes(value)) {
+		return 'reply_and_reaction';
 	}
+	return undefined;
+}
 
-	if (decision.action === 'ignore') {
-		if (hasEmotion && !hasExtremeEmotion) {
-			return { action: 'reaction', reaction: decision.reaction || reactionEmoji };
+function parseInstructionOutput(rawOutput, originalContent) {
+	if (!rawOutput) return null;
+
+	const tokens = rawOutput
+		.split(commandSplitRegex)
+		.map(token => token.trim())
+		.filter(Boolean);
+
+	if (!tokens.length) return null;
+
+	const aliasMap = {
+		reply: 'reply',
+		say: 'reply',
+		message: 'reply',
+		text: 'reply',
+		hi: 'reply',
+		react: 'reaction',
+		reaction: 'reaction',
+		emoji: 'reaction',
+		action: 'action',
+		mode: 'action',
+		plan: 'action'
+	};
+
+	let replyText;
+	let reaction;
+	let explicitAction;
+	let pendingKey = null;
+
+	for (const token of tokens) {
+		const pairMatch = token.match(/^([^|:]+)[|:](.+)$/);
+		let key;
+		let value;
+
+		if (pairMatch) {
+			key = pairMatch[1].trim().toLowerCase();
+			value = pairMatch[2].trim();
+		} else if (pendingKey) {
+			key = pendingKey;
+			value = token;
+			pendingKey = null;
+		} else {
+			const normalized = token.toLowerCase();
+			if (aliasMap[normalized]) {
+				pendingKey = normalized;
+				continue;
+			}
+
+			const inferredAction = coerceActionKeyword(normalized);
+			if (inferredAction) {
+				explicitAction = inferredAction;
+				continue;
+			}
+
+			// treat standalone text as reply content if nothing else filled
+			if (!replyText) {
+				replyText = token;
+			}
+			continue;
 		}
-		return decision;
-	}
 
-	if (decision.action === 'reaction') {
-		if (!hasEmotion) {
-			return { action: 'ignore' };
+		const canonicalKey = aliasMap[key] || key;
+
+		if (canonicalKey === 'reply') {
+			if (value) replyText = value;
+			continue;
 		}
 
-		return {
-			action: 'reaction',
-			reaction: decision.reaction || reactionEmoji,
-		};
+		if (canonicalKey === 'reaction') {
+			reaction = normalizeEmojiValue(value) || reactionEmoji;
+			continue;
+		}
+
+		if (canonicalKey === 'action') {
+			const inferred = coerceActionKeyword(value);
+			if (inferred) explicitAction = inferred;
+			continue;
+		}
 	}
 
-	if (decision.action === 'reply_and_reaction') {
-		return {
-			action: 'reply_and_reaction',
-			replyText: decision.replyText || supportiveReply,
-			reaction: decision.reaction || reactionEmoji,
-		};
+	// handle trailing command without value
+	if (pendingKey === 'reaction' && !reaction) {
+		reaction = reactionEmoji;
+	} else if (pendingKey === 'reply' && !replyText) {
+		replyText = supportiveReply;
 	}
 
-	return deriveFallbackDecision(content);
+	if (!replyText && explicitAction === 'reply') {
+		replyText = supportiveReply;
+	}
+	if (!reaction && (explicitAction === 'reaction' || explicitAction === 'reply_and_reaction')) {
+		reaction = reactionEmoji;
+	}
+
+	let action = 'ignore';
+	if (replyText && reaction) {
+		action = 'reply_and_reaction';
+	} else if (replyText) {
+		action = 'reply';
+	} else if (reaction) {
+		action = 'reaction';
+	} else if (explicitAction) {
+		action = explicitAction;
+	}
+
+	if (action !== 'reply' && action !== 'reply_and_reaction') {
+		replyText = undefined;
+	}
+
+	if (action !== 'reaction' && action !== 'reply_and_reaction') {
+		reaction = undefined;
+	}
+
+	return { action, replyText, reaction };
 }
 
 const client = new Client({
@@ -157,9 +279,9 @@ async function analyzeIncomingMessage(message) {
 		});
 
 		const aiReply = completion.choices[0]?.message?.content;
-		if (!aiReply) throw new Error('AI response was empty');
-		const parsed = JSON.parse(aiReply);
-		return enforceEmotionPolicy(parsed, message.content);
+		const plan = parseInstructionOutput(aiReply, message.content);
+		if (!plan) throw new Error('AI plan was empty or invalid');
+		return plan;
 	} catch (error) {
 		console.error('AI 判斷失敗，改用預設策略：', error.message);
 		return deriveFallbackDecision(message.content);
