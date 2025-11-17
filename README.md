@@ -31,10 +31,10 @@
 
 ## How The Bot Decides
 
-- **AI 判斷互動條件**：Bot 將訊息內容送往 OpenAI，模型根據系統提示輸出 JSON，決定是要 `reply`、`reaction` 或 `ignore`。
-- **回覆流程**：當輸出 `{"action":"reply","replyText":"..."}` 時，Bot 會以繁體中文回覆，內容由模型依照當前語境產生。
-- **表情流程**：若輸出 `{"action":"reaction"}`，Bot 只會按表情，可由模型指定 `reaction` 欄位，否則使用 `REACTION_EMOJI`（預設 👍）。
-- **忽略流程**：若輸出 `{"action":"ignore"}`，Bot 將完全不動作，避免打擾無關對話。
-- **安全退回機制**：若未設定 `OPENAI_API_KEY` 或 AI 呼叫失敗，Bot 會回到舊行為——偵測 `lfa` 關鍵字回覆，否則按預設表情。
+- **單一 JSON 指令**：AI 每次回傳 `action` 字段，值只能是 `reply_and_reaction`、`reaction` 或 `ignore`。
+- **極低情緒才發言**：當訊息情緒極端低落、求助或直接點名 `lfa` 並表達痛苦時，AI 會輸出 `reply_and_reaction`，Bot 先用繁體中文安撫，再立即按表情符號。
+- **一般情緒僅表情**：只要偵測到任何情緒起伏（開心、興奮、生氣…）但未到極低，AI 僅輸出 `reaction`，Bot 只會用表情回應。
+- **情緒平穩就忽略**：沒有情緒波動的訊息則得到 `ignore`，Bot 不會說話也不會按表情，避免洗頻。
+- **安全退回機制**：若未設定 `OPENAI_API_KEY` 或 AI 呼叫失敗，Bot 會用簡易規則推論——偵測悲傷字詞就回覆+表情、偵測情緒符號就只按表情、否則忽略。
 
 可參考 [取得 OpenAI API](https://github.com/chatanywhere/GPT_API_free) 與 [串接教學](https://www.newspiggy.com/post/how-to-set-openai-chatgpt-api) 設定 `OPENAI_*` 參數。
