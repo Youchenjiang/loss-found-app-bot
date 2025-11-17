@@ -7,11 +7,12 @@ const {
 	REACTION_EMOJI,
 	OPENAI_API_KEY,
 	OPENAI_BASE_URL,
-	OPENAI_MODEL
+	OPENAI_MODEL,
+	LOW_EMOTION_REPLY
 } = process.env;
 
 const keyword = 'lfa';
-const responseMessage = '你好啊！';
+const supportiveReply = LOW_EMOTION_REPLY || '聽起來你真的辛苦了，先深呼吸、給自己一點時間，也別忘了找信任的人聊聊。';
 const reactionEmoji = REACTION_EMOJI || '👍';
 const decisionModel = OPENAI_MODEL || 'gpt-4o-mini';
 const lowEmotionCuePattern = /(崩潰|崩溃|難過|难过|傷心|伤心|痛苦|絕望|绝望|我不行|不想活|好累|沮喪|沮丧|憂鬱|忧郁|焦慮|焦虑|壓力|压力|help|救命|救救我|拜託|拜托|QQ|T_T|:'\(|:’\(|哭|哭哭|sob|depress|anxious|無助|无助|恐慌|失眠|自責|自责|痛心|遺憾|遗憾|煎熬)/i;
@@ -28,6 +29,7 @@ const decisionSystemPrompt = `
 你是一個專門評估訊息情緒的 Discord Bot 決策助理。請依照輸入的訊息內容，輸出唯一一個 JSON 結果，用於決定是否互動。
 - 先判斷情緒強度：neutral（無情緒）、emotional（有起伏但未到極低）、extremely_low（極度低落或求助）。
 - action 只能是 "reply_and_reaction"、"reaction" 或 "ignore"。
+- 僅在句子出現悲傷/求助詞、情緒化語彙、強烈標點、表情符號時才視為 emotional；像「在嗎」「OK」等平鋪直敘訊息必須判為 neutral。
 - 只有 extremely_low 才能輸出 "reply_and_reaction"，此時必須提供繁體中文、充滿鼓勵與陪伴語氣的 replyText。內容應著重溫暖、肯定、提醒對方休息或深呼吸，避免承諾「我能幫忙」或詢問「需要我幫什麼」。
 - 若是 emotional（但未到極低），action 必須為 "reaction"，可提供 reaction 表情但禁止輸出文字回覆。
 - 若為 neutral，action 為 "ignore"，不做任何事。
@@ -42,7 +44,7 @@ function deriveFallbackDecision(content = '') {
 	if (isExtremelyLow) {
 		return {
 			action: 'reply_and_reaction',
-			replyText: responseMessage,
+			replyText: supportiveReply,
 			reaction: reactionEmoji,
 		};
 	}
@@ -66,20 +68,33 @@ async function reactToMessage(message, emojiCandidate) {
 }
 
 function enforceEmotionPolicy(decision, content = '') {
-	if (!decision || !decision.action) {
-		return deriveFallbackDecision(content);
+	const normalized = content || '';
+	const lowered = normalized.toLowerCase();
+	const hasExtremeEmotion = lowered.includes(keyword) || lowEmotionCuePattern.test(normalized);
+	const hasEmotion = hasExtremeEmotion || emotionalCuePattern.test(normalized);
+
+	if (hasExtremeEmotion && decision.action !== 'reply_and_reaction') {
+		return {
+			action: 'reply_and_reaction',
+			replyText: decision.replyText || supportiveReply,
+			reaction: decision.reaction || reactionEmoji,
+		};
 	}
 
-	const hasExtremeEmotion = lowEmotionCuePattern.test(content) || content.toLowerCase().includes(keyword);
-	const hasEmotion = emotionalCuePattern.test(content);
-
-	if (decision.action === 'ignore' && hasEmotion && !hasExtremeEmotion) {
-		return { action: 'reaction', reaction: decision.reaction || reactionEmoji };
+	if (decision.action === 'ignore') {
+		if (hasEmotion && !hasExtremeEmotion) {
+			return { action: 'reaction', reaction: decision.reaction || reactionEmoji };
+		}
+		return decision;
 	}
 
 	if (decision.action === 'reaction') {
+		if (!hasEmotion) {
+			return { action: 'ignore' };
+		}
+
 		return {
-			...decision,
+			action: 'reaction',
 			reaction: decision.reaction || reactionEmoji,
 		};
 	}
@@ -87,12 +102,12 @@ function enforceEmotionPolicy(decision, content = '') {
 	if (decision.action === 'reply_and_reaction') {
 		return {
 			action: 'reply_and_reaction',
-			replyText: decision.replyText || responseMessage,
+			replyText: decision.replyText || supportiveReply,
 			reaction: decision.reaction || reactionEmoji,
 		};
 	}
 
-	return decision;
+	return deriveFallbackDecision(content);
 }
 
 const client = new Client({
@@ -158,7 +173,7 @@ client.on('messageCreate', async message => {
 	if (!decision || decision.action === 'ignore') return;
 
 	if (decision.action === 'reply_and_reaction') {
-		const replyText = decision.replyText || responseMessage;
+		const replyText = decision.replyText || supportiveReply;
 		if (replyText) {
 			try {
 				await message.reply(replyText);
