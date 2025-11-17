@@ -32,11 +32,9 @@
 
 ## How The Bot Decides
 
-- **單一 JSON 指令**：AI 每次回傳 `action` 字段，值只能是 `reply_and_reaction`、`reaction` 或 `ignore`。
-- **極低情緒才發言**：當訊息情緒極端低落、求助或直接點名 `lfa` 並表達痛苦時，AI 會輸出 `reply_and_reaction`，Bot 會用鼓勵、陪伴語氣的繁體中文安撫，再立即按表情符號。
-- **一般情緒僅表情**：只要偵測到任何情緒起伏（開心、興奮、生氣…）但未到極低，AI 必定輸出 `reaction`，Bot 只會用表情回應以避免洗頻。
-- **情緒平穩就忽略**：沒有情緒波動的訊息則得到 `ignore`，Bot 不會說話也不會按表情，避免洗頻。
-- **雙重檢查**：就算 AI 回傳 `reaction`，Bot 仍會檢查訊息是否真的包含情緒詞／激動標點；若沒有，會改成 `ignore`，避免隨機亂按表情。
-- **安全退回機制**：若未設定 `OPENAI_API_KEY` 或 AI 呼叫失敗，Bot 會用簡易規則推論——偵測悲傷字詞就回覆+表情、偵測情緒符號就只按表情、否則忽略。可透過 `LOW_EMOTION_REPLY` 自訂安撫訊息。
+- **AI 指令格式**：模型只會輸出幾個用逗號分隔的 `KEY|VALUE` 指令，例如 `react|👍, reply|記得好好休息` 或 `action|ignore`。`KEY` 可以是 `react`/`reaction`/`emoji`、`reply`/`message`/`text`、`action`/`mode` 等。
+- **完全交給 AI 判斷**：Bot 只解析這些指令並執行。`reply|...` 會觸發訊息回覆、`react|...` 會按對應表情、同時出現則依序完成兩種動作。若輸出 `action|ignore` 則保持沉默。
+- **情緒映射**：若 AI 僅輸出 `emoji|sad` 或 `react|bad` 這類關鍵字，Bot 會自動轉成預設的悲傷表情；使用 `good/positive/happy` 等字樣則會轉成讚或笑臉。
+- **安全退回機制**：當未提供 OpenAI API 或呼叫失敗時，Bot 會啟動本地簡易判斷——偵測悲傷字詞就回覆 + 表情、偵測情緒符號就只按表情、否則忽略。`LOW_EMOTION_REPLY` 可自訂安撫語。
 
 可參考 [取得 OpenAI API](https://github.com/chatanywhere/GPT_API_free) 與 [串接教學](https://www.newspiggy.com/post/how-to-set-openai-chatgpt-api) 設定 `OPENAI_*` 參數。
