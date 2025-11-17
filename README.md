@@ -1,6 +1,6 @@
 # Loss Found App Bot
 
-A simple Discord bot that replies to a specific keyword in chat.
+A simple Discord bot that replies to a specific keyword in chat and adds a reaction emoji to every non-bot message it hears.
 
 ## Setup
 
@@ -11,6 +11,7 @@ A simple Discord bot that replies to a specific keyword in chat.
     TOKEN=YOUR_BOT_TOKEN
     CLIENT_ID=YOUR_CLIENT_ID
     GUILD_ID=YOUR_GUILD_ID
+    REACTION_EMOJI=OPTIONAL_CUSTOM_EMOJI
     ```
 
 2. **Install dependencies:**

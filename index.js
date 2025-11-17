@@ -1,9 +1,10 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
-const { CLIENT_ID, GUILD_ID, TOKEN } = process.env;
+const { CLIENT_ID, GUILD_ID, TOKEN, REACTION_EMOJI } = process.env;
 
 const keyword = 'lfa';
 const responseMessage = '你好啊！';
+const reactionEmoji = REACTION_EMOJI || '👍';
 
 const client = new Client({
 	intents: [
@@ -41,6 +42,12 @@ client.on('messageCreate', async message => {
 	if (message.author.bot) return;
 	if(message.content.includes(keyword)){
 		message.reply(responseMessage)
+	}
+
+	try {
+		await message.react(reactionEmoji);
+	} catch (error) {
+		console.error(`無法在訊息上加入表情符號: ${error.message}`);
 	}
 })
 
