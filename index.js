@@ -14,6 +14,8 @@ const keyword = 'lfa';
 const responseMessage = '你好啊！';
 const reactionEmoji = REACTION_EMOJI || '👍';
 const decisionModel = OPENAI_MODEL || 'gpt-4o-mini';
+const lowEmotionCuePattern = /(崩潰|崩溃|難過|难过|傷心|伤心|痛苦|絕望|绝望|我不行|不想活|好累|沮喪|沮丧|憂鬱|忧郁|焦慮|焦虑|壓力|压力|help|救命|救救我|拜託|拜托|QQ|T_T|:'\(|:’\(|哭|哭哭|sob|depress|anxious)/i;
+const emotionalCuePattern = /[!?！？…~⋯]|(XD|QQ|囧|怒|氣|气|哭|笑|爽|悲|累|崩潰|崩溃|開心|开心|難過|难过|興奮|兴奋|緊張|紧张|害怕)/i;
 
 const openai = OPENAI_API_KEY
 	? new OpenAI({
@@ -23,15 +25,45 @@ const openai = OPENAI_API_KEY
 	: null;
 
 const decisionSystemPrompt = `
-你是一個只負責判斷 Discord Bot 回應方式的助理。請依照輸入的訊息內容，輸出唯一一個 JSON 結果，用於決定是否互動。
-- action 只能是 "reply"、"reaction" 或 "ignore"。
-- 若 action 為 "reply"，必須提供 replyText（繁體中文），reaction 可省略。
-- 若 action 為 "reaction"，可提供 reaction 欄位表示自訂表情，否則由程式決定。
-- 若訊息與 bot 無關、或應忽略，action 為 "ignore"。
-- 優先在被點名、包含關鍵字 "lfa"、需要協助或有疑問時選擇 reply。
-- 簡短正向訊息可用 reaction；禁止同時回覆與按表情。
-- 嚴格回傳單一 JSON，不得有多餘文字。
+你是一個專門評估訊息情緒的 Discord Bot 決策助理。請依照輸入的訊息內容，輸出唯一一個 JSON 結果，用於決定是否互動。
+- 先判斷情緒強度：neutral（無情緒）、emotional（有起伏但未到極低）、extremely_low（極度低落或求助）。
+- action 只能是 "reply_and_reaction"、"reaction" 或 "ignore"。
+- 只有 extremely_low 才能輸出 "reply_and_reaction"，此時必須提供繁體中文的 replyText，並盡量提供 reaction（若省略將由程式補上）。
+- 若只是 emotional（但非極低），action 只能是 "reaction"，可提供 reaction 表情，避免回覆文字。
+- 若為 neutral，action 為 "ignore"，不做任何事。
+- 需特別注意求救語氣、悲傷詞彙、直接點名 "lfa" 並帶情緒的訊息，通常屬於 extremely_low。
+- 嚴格回傳單一 JSON，不得輸出額外文字。
 `;
+
+function deriveFallbackDecision(content = '') {
+	const normalized = content.toLowerCase();
+	const isExtremelyLow = normalized.includes(keyword) || lowEmotionCuePattern.test(content);
+
+	if (isExtremelyLow) {
+		return {
+			action: 'reply_and_reaction',
+			replyText: responseMessage,
+			reaction: reactionEmoji,
+		};
+	}
+
+	if (emotionalCuePattern.test(content)) {
+		return { action: 'reaction', reaction: reactionEmoji };
+	}
+
+	return { action: 'ignore' };
+}
+
+async function reactToMessage(message, emojiCandidate) {
+	const emojiToUse = emojiCandidate || reactionEmoji;
+	if (!emojiToUse) return;
+
+	try {
+		await message.react(emojiToUse);
+	} catch (error) {
+		console.error(`無法在訊息上加入表情符號: ${error.message}`);
+	}
+}
 
 const client = new Client({
 	intents: [
@@ -58,10 +90,7 @@ client.on('interactionCreate', async interaction => {
 
 async function analyzeIncomingMessage(message) {
 	if (!openai) {
-		if (message.content.includes(keyword)) {
-			return { action: 'reply', replyText: responseMessage };
-		}
-		return { action: 'reaction', reaction: reactionEmoji };
+		return deriveFallbackDecision(message.content);
 	}
 
 	try {
@@ -87,10 +116,7 @@ async function analyzeIncomingMessage(message) {
 		return JSON.parse(aiReply);
 	} catch (error) {
 		console.error('AI 判斷失敗，改用預設策略：', error.message);
-		if (message.content.includes(keyword)) {
-			return { action: 'reply', replyText: responseMessage };
-		}
-		return { action: 'reaction', reaction: reactionEmoji };
+		return deriveFallbackDecision(message.content);
 	}
 }
 
@@ -100,18 +126,22 @@ client.on('messageCreate', async message => {
 	const decision = await analyzeIncomingMessage(message);
 	if (!decision || decision.action === 'ignore') return;
 
-	if (decision.action === 'reply' && decision.replyText) {
-		await message.reply(decision.replyText);
+	if (decision.action === 'reply_and_reaction') {
+		const replyText = decision.replyText || responseMessage;
+		if (replyText) {
+			try {
+				await message.reply(replyText);
+			} catch (error) {
+				console.error(`無法回覆訊息: ${error.message}`);
+			}
+		}
+
+		await reactToMessage(message, decision.reaction);
 		return;
 	}
 
 	if (decision.action === 'reaction') {
-		const emojiToUse = decision.reaction || reactionEmoji;
-		try {
-			await message.react(emojiToUse);
-		} catch (error) {
-			console.error(`無法在訊息上加入表情符號: ${error.message}`);
-		}
+		await reactToMessage(message, decision.reaction);
 	}
 });
 
