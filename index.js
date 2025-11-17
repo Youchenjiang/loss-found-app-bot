@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 const OpenAI = require('openai');
+const featureFlags = require('./config/features');
 
 const {
 	TOKEN,
@@ -42,7 +43,7 @@ const emojiKeywordMap = {
 	anxious: '😰'
 };
 
-const openai = OPENAI_API_KEY
+const openai = OPENAI_API_KEY && featureFlags.useOpenAI
 	? new OpenAI({
 		apiKey: OPENAI_API_KEY,
 		baseURL: OPENAI_BASE_URL || undefined,
@@ -79,6 +80,8 @@ function deriveFallbackDecision(content = '') {
 }
 
 async function reactToMessage(message, emojiCandidate) {
+	if (!featureFlags.allowReactions) return;
+
 	const emojiToUse = emojiCandidate || reactionEmoji;
 	if (!emojiToUse) return;
 
@@ -232,6 +235,42 @@ function parseInstructionOutput(rawOutput, originalContent) {
 	return { action, replyText, reaction };
 }
 
+function applyFeatureGates(plan) {
+	if (!plan) return null;
+
+	let { action, replyText, reaction } = plan;
+
+	if (!featureFlags.allowReplies) {
+		replyText = undefined;
+
+		if (action === 'reply_and_reaction') {
+			action = featureFlags.allowReactions && reaction ? 'reaction' : 'ignore';
+		} else if (action === 'reply') {
+			action = featureFlags.allowReactions && reaction ? 'reaction' : 'ignore';
+		}
+	}
+
+	if (!featureFlags.allowReactions) {
+		reaction = undefined;
+
+		if (action === 'reply_and_reaction') {
+			action = replyText ? 'reply' : 'ignore';
+		} else if (action === 'reaction') {
+			action = 'ignore';
+		}
+	}
+
+	if ((action === 'reply' || action === 'reply_and_reaction') && !replyText) {
+		action = reaction && featureFlags.allowReactions ? 'reaction' : 'ignore';
+	}
+
+	if ((action === 'reaction' || action === 'reply_and_reaction') && !reaction) {
+		action = replyText && featureFlags.allowReplies ? 'reply' : 'ignore';
+	}
+
+	return action === 'ignore' ? { action } : { action, replyText, reaction };
+}
+
 const client = new Client({
 	intents: [
 		GatewayIntentBits.Guilds,
@@ -257,7 +296,7 @@ client.on('interactionCreate', async interaction => {
 
 async function analyzeIncomingMessage(message) {
 	if (!openai) {
-		return deriveFallbackDecision(message.content);
+		return applyFeatureGates(deriveFallbackDecision(message.content));
 	}
 
 	try {
@@ -281,10 +320,10 @@ async function analyzeIncomingMessage(message) {
 		const aiReply = completion.choices[0]?.message?.content;
 		const plan = parseInstructionOutput(aiReply, message.content);
 		if (!plan) throw new Error('AI plan was empty or invalid');
-		return plan;
+		return applyFeatureGates(plan);
 	} catch (error) {
 		console.error('AI 判斷失敗，改用預設策略：', error.message);
-		return deriveFallbackDecision(message.content);
+		return applyFeatureGates(deriveFallbackDecision(message.content));
 	}
 }
 
